@@ -30,6 +30,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
+import { supabase } from './lib/supabase';
 
 // --- Types ---
 export interface Meme {
@@ -49,6 +50,7 @@ export interface Meme {
   reports: number;
   badge_text?: string;
   badge_color?: string;
+  posted_at?: string; // used by raw supabase objects
   userTotalScore?: number;
   userTotalViews?: number;
   userMemeCount?: number;
@@ -95,18 +97,10 @@ const memeSchema = z.object({
   fileType: z.enum(['image', 'video', 'audio']),
 });
 
-// --- Helper for API Calls ---
+// --- Helper for API Calls (Legacy fallback, now prefer Supabase)
 const apiFetch = async (url: string, options: any = {}) => {
-  const token = localStorage.getItem('opmgg_token');
-  const headers = { ...options.headers };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  
-  const response = await fetch(url, { 
-    ...options, 
-    headers, 
-    credentials: 'include' 
-  });
-
+  // If user is trying to use legacy Node API, show warning or handle
+  const response = await fetch(url, options);
   return response;
 };
 
@@ -171,10 +165,10 @@ const MemeCard: React.FC<MemeCardProps> = ({ meme, user, rewardRules, onAuthRequ
     // Record view in the background
     const recordView = async () => {
       try {
-        await fetch(`/api/memes/${meme.id}/view`, { method: 'POST' });
+        await supabase.rpc('increment_meme_views', { meme_id: meme.id });
       } catch (err) {}
     };
-    const timer = setTimeout(recordView, 2000); // Record view after 2 seconds on screen
+    const timer = setTimeout(recordView, 2000); 
     return () => clearTimeout(timer);
   }, [meme.id]);
 
@@ -187,14 +181,20 @@ const MemeCard: React.FC<MemeCardProps> = ({ meme, user, rewardRules, onAuthRequ
     if (isVoting) return;
     setIsVoting(true);
     try {
-      const res = await apiFetch(`/api/memes/${meme.id}/vote`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ value })
-      });
-      if (res.ok) {
-        onUpdate();
+      // In Supabase, we can use a stored procedure or simple upsert
+      const { data: existingVote } = await supabase
+        .from('votes')
+        .select('value')
+        .eq('meme_id', meme.id)
+        .eq('user_id', user.id)
+        .single();
+
+      if (existingVote && existingVote.value === value) {
+        await supabase.from('votes').delete().eq('meme_id', meme.id).eq('user_id', user.id);
+      } else {
+        await supabase.from('votes').upsert({ meme_id: meme.id, user_id: user.id, value });
       }
+      onUpdate();
     } catch (err) {
       console.error('Vote failed', err);
     } finally {
@@ -207,13 +207,9 @@ const MemeCard: React.FC<MemeCardProps> = ({ meme, user, rewardRules, onAuthRequ
     if (!window.confirm('Tem certeza que deseja excluir esta publicação?')) return;
     setIsDeleting(true);
     try {
-      const res = await apiFetch(`/api/memes/${meme.id}`, { method: 'DELETE' });
-      if (res.ok) {
-        onUpdate();
-      } else {
-        const data = await res.json();
-        throw new Error(data.error || 'Erro ao deletar');
-      }
+      const { error } = await supabase.from('memes').delete().eq('id', meme.id);
+      if (error) throw error;
+      onUpdate();
     } catch (err: any) {
       alert(err.message || 'Erro ao deletar');
     } finally {
@@ -354,28 +350,38 @@ function AuthModal({ mode, setMode, setError, onSuccess, onClose }: { mode: 'log
 
   const onSubmit = async (data: any) => {
     try {
-      const endpoint = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-        credentials: 'include'
-      });
-      
-      const resData = await res.json().catch(() => ({}));
-      
-      if (res.ok) {
-        if (resData.token) localStorage.setItem('opmgg_token', resData.token);
-        onSuccess(resData);
+      if (mode === 'register') {
+        const { data: authData, error: authError } = await supabase.auth.signUp({
+          email: `${data.username.toLowerCase()}@opmgg.com`, // Fake email for simplicity, or user real email if schema updated
+          password: data.password,
+          options: {
+            data: { username: data.username }
+          }
+        });
+        if (authError) throw authError;
+        if (authData.user) {
+          // Profile is created via Trigger in Supabase (recommended) 
+          // or manually here if no trigger exists.
+          onSuccess({ id: authData.user.id, username: data.username, role: 'agent' });
+        }
       } else {
-        if (res.status === 404) {
-          setError('Backend não encontrado. Se você publicou no Netlify, saiba que esta aplicação requer um servidor Node.js (Full-Stack) para funcionar.');
-        } else {
-          setError(resData.error || 'Ocorreu um erro ao processar a solicitação.');
+        const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+          email: `${data.username.toLowerCase()}@opmgg.com`,
+          password: data.password,
+        });
+        if (authError) throw authError;
+        if (authData.user) {
+          // Fetch profile
+          const { data: profile } = await supabase.from('profiles').select('*').eq('id', authData.user.id).single();
+          onSuccess({ 
+            id: authData.user.id, 
+            username: profile?.username || data.username, 
+            role: profile?.role || 'agent' 
+          });
         }
       }
     } catch (err: any) {
-      setError('Erro de conexão. Verifique se o servidor backend está rodando.');
+      setError(err.message || 'Erro durante a autenticação.');
     }
   };
 
@@ -485,23 +491,24 @@ function PostModal({ onClose, user, setError, onSuccess }: { onClose: () => void
     try {
       let finalFileUrl = data.fileUrl;
 
-      // Handle file upload if present
+      // Handle file upload to Supabase Storage
       if (selectedFile || audioBlob) {
-        const formData = new FormData();
-        formData.append('file', selectedFile || audioBlob!);
+        const file = selectedFile || audioBlob!;
+        const fileExt = selectedFile ? selectedFile.name.split('.').pop() : 'webm';
+        const fileName = `${Math.random().toString(36).substring(2, 11)}_${Date.now()}.${fileExt}`;
+        const filePath = `memes/${fileName}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from('uploads')
+          .upload(filePath, file);
+
+        if (uploadError) throw uploadError;
+
+        const { data: { publicUrl } } = supabase.storage
+          .from('uploads')
+          .getPublicUrl(filePath);
         
-        const uploadRes = await apiFetch('/api/upload', {
-          method: 'POST',
-          body: formData,
-        });
-        
-        if (!uploadRes.ok) {
-          const err = await uploadRes.json();
-          throw new Error(err.error || 'Erro no upload');
-        }
-        
-        const uploadData = await uploadRes.json();
-        finalFileUrl = uploadData.fileUrl;
+        finalFileUrl = publicUrl;
       }
 
       if (!finalFileUrl) {
@@ -509,18 +516,23 @@ function PostModal({ onClose, user, setError, onSuccess }: { onClose: () => void
         return;
       }
 
-      const res = await apiFetch('/api/memes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...data, fileUrl: finalFileUrl }),
-      });
+      const { data: memeData, error: insertError } = await supabase
+        .from('memes')
+        .insert({
+          title: data.title,
+          author: data.author,
+          posted_by: user?.username || 'Anônimo',
+          posted_by_id: user?.id,
+          file_url: finalFileUrl,
+          file_type: data.fileType,
+          tags: data.tags.split(',').map((t: string) => t.trim()).filter(Boolean),
+          description: data.description || ''
+        })
+        .select()
+        .single();
 
-      if (res.ok) {
-        onSuccess();
-      } else {
-        const errData = await res.json();
-        setError(errData.error || 'Erro ao publicar.');
-      }
+      if (insertError) throw insertError;
+      onSuccess();
     } catch (err: any) {
       setError(err.message || 'Erro ao enviar conteúdo.');
     }
@@ -654,10 +666,8 @@ export default function App() {
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
   const [userSearchResults, setUserSearchResults] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [backendStatus, setBackendStatus] = useState<'online' | 'offline' | 'checking'>('checking');
 
   useEffect(() => {
-    checkBackend();
     fetchUser();
     fetchMemes().then((fetchedMemes) => {
       const params = new URLSearchParams(window.location.search);
@@ -670,13 +680,7 @@ export default function App() {
   }, []);
 
   const checkBackend = async () => {
-    try {
-      const res = await fetch('/api/health');
-      if (res.ok) setBackendStatus('online');
-      else setBackendStatus('offline');
-    } catch (err) {
-      setBackendStatus('offline');
-    }
+    // No longer needed as we use Supabase
   };
 
   useEffect(() => {
@@ -686,12 +690,21 @@ export default function App() {
 
   const fetchUser = async () => {
     try {
-      const res = await apiFetch('/api/auth/me');
-      if (res.ok) {
-        const data = await res.json();
-        setUser(data);
-      } else {
-        localStorage.removeItem('opmgg_token');
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+      if (authUser) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', authUser.id)
+          .single();
+        
+        setUser({
+          id: authUser.id,
+          username: profile?.username || authUser.user_metadata?.username || 'Usuário',
+          role: profile?.role || 'agent',
+          badge_text: profile?.badge_text,
+          badge_color: profile?.badge_color
+        });
       }
     } catch (err) {
       console.error('Session check failed', err);
@@ -702,29 +715,46 @@ export default function App() {
 
   const fetchMemes = async () => {
     try {
-      const url = new URL('/api/memes', window.location.origin);
-      url.searchParams.append('sort', sortBy);
-      if (selectedTag) url.searchParams.append('tag', selectedTag);
-      if (selectedProfileId) url.searchParams.append('userId', selectedProfileId);
+      let query = supabase
+        .from('memes')
+        .select(`
+          *,
+          profiles:posted_by_id (badge_text, badge_color)
+        `);
+
+      if (selectedTag) query = query.contains('tags', [selectedTag]);
+      if (selectedProfileId) query = query.eq('posted_by_id', selectedProfileId);
       
-      const res = await apiFetch(url.pathname + url.search);
-      if (res.status === 404) {
-        setError('Servidor backend não encontrado em ' + window.location.origin + '. Esta aplicação requer um servidor Node.js operando para fornecer os dados.');
-        setMemes([]);
-        return [];
-      }
-      const data = await res.json().catch(() => ({ error: 'Dados inválidos do servidor' }));
-      if (Array.isArray(data)) {
-        setMemes(data);
-        return data;
-      } else {
-        console.error('Fetch memes failed: expected array, got', data);
-        setMemes([]);
-        if (data.error) setError(data.error);
-        return [];
-      }
+      if (sortBy === 'trending') query = query.order('score', { ascending: false });
+      else query = query.order('created_at', { ascending: false });
+
+      const { data, error: fetchError } = await query;
+      if (fetchError) throw fetchError;
+
+      const formattedMemes = (data || []).map((m: any) => ({
+        ...m,
+        id: m.id,
+        title: m.title,
+        author: m.author,
+        postedBy: m.posted_by,
+        postedById: m.posted_by_id,
+        postedAt: m.created_at || m.posted_at,
+        fileUrl: m.file_url,
+        fileType: m.file_type,
+        tags: m.tags || [],
+        description: m.description,
+        score: m.score || 0,
+        views: m.views || 0,
+        reports: m.reports || 0,
+        badge_text: m.profiles?.badge_text,
+        badge_color: m.profiles?.badge_color
+      }));
+
+      setMemes(formattedMemes);
+      return formattedMemes;
     } catch (err) {
       console.error('Fetch memes failed', err);
+      // Fallback empty state
       setMemes([]);
       return [];
     }
@@ -736,11 +766,13 @@ export default function App() {
       return;
     }
     try {
-      const res = await apiFetch(`/api/users/search?q=${encodeURIComponent(query)}`);
-      if (res.ok) {
-        const data = await res.json();
-        setUserSearchResults(data);
-      }
+      const { data } = await supabase
+        .from('profiles')
+        .select('id, username, badge_text, badge_color')
+        .ilike('username', `%${query}%`)
+        .limit(5);
+      
+      if (data) setUserSearchResults(data);
     } catch (err) {}
   };
 
@@ -751,10 +783,22 @@ export default function App() {
   const fetchAdminReports = async () => {
     if (user?.role !== 'admin') return;
     try {
-      const res = await apiFetch('/api/admin/reports');
-      if (res.ok) {
-        const data = await res.json();
-        setAdminReports(data);
+      const { data } = await supabase
+        .from('reports')
+        .select(`
+          *,
+          meme:memes (title),
+          reporter:profiles!reports_user_id_fkey (username)
+        `)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false });
+      
+      if (data) {
+        setAdminReports(data.map((r: any) => ({
+          ...r,
+          memeTitle: r.meme?.title,
+          reporterName: r.reporter?.username
+        })));
       }
     } catch (err) {}
   };
@@ -762,35 +806,38 @@ export default function App() {
   const fetchAdminUsers = async () => {
     if (user?.role !== 'admin') return;
     try {
-      const res = await apiFetch('/api/admin/users');
-      if (res.ok) {
-        const data = await res.json();
-        setAdminUsers(data);
-      }
+      // For detailed stats, we would ideally use a database view or function
+      const { data } = await supabase
+        .from('profiles')
+        .select('*')
+        .order('username', { ascending: true });
+      
+      if (data) setAdminUsers(data as User[]);
     } catch (err) {}
   };
 
   const handleUpdateBadge = async (userId: string, badgeText: string, badgeColor: string) => {
     try {
-      const res = await apiFetch(`/api/admin/users/${userId}/badge`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ badge_text: badgeText, badge_color: badgeColor })
-      });
-      if (res.ok) {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ badge_text: badgeText || null, badge_color: badgeColor || null })
+        .eq('id', userId);
+      
+      if (!error) {
         fetchAdminUsers();
-        fetchMemes(); // Refresh badges in feed
+        fetchMemes();
       }
     } catch (err) {}
   };
 
   const fetchRewardRules = async () => {
     try {
-      const res = await apiFetch('/api/admin/reward-rules');
-      if (res.ok) {
-        const data = await res.json();
-        setRewardRules(data);
-      }
+      const { data } = await supabase
+        .from('reward_rules')
+        .select('*')
+        .order('created_at', { ascending: true });
+      
+      if (data) setRewardRules(data as RewardRule[]);
     } catch (err) {}
   };
 
@@ -835,31 +882,25 @@ export default function App() {
   }, [memes, debouncedSearch]);
 
   const handleLogout = async () => {
-    try {
-      await apiFetch('/api/auth/logout', { method: 'POST' });
-    } catch (err) {}
-    localStorage.removeItem('opmgg_token');
+    await supabase.auth.signOut();
     setUser(null);
     setIsAdminPanelOpen(false);
   };
 
   const handleReport = async () => {
-    if (!reportingMeme) return;
+    if (!reportingMeme || !user) return;
     
     try {
-      const res = await apiFetch(`/api/memes/${reportingMeme.id}/report`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason: reportReason.trim() })
+      const { error } = await supabase.from('reports').insert({
+        meme_id: reportingMeme.id,
+        user_id: user.id,
+        reason: reportReason.trim()
       });
-      if (res.ok) {
-        alert('Seu reporte foi enviado para análise. Obrigado!');
-        setReportingMeme(null);
-        setReportReason('');
-      } else {
-        const d = await res.json();
-        alert(d.error || 'Erro ao reportar');
-      }
+      if (error) throw error;
+      
+      alert('Seu reporte foi enviado para análise. Obrigado!');
+      setReportingMeme(null);
+      setReportReason('');
     } catch (err) {
       console.error('Report failed', err);
     }
@@ -867,31 +908,28 @@ export default function App() {
 
   const handleResolveReport = async (reportId: string, action: 'dismiss' | 'delete_meme') => {
     try {
-      const res = await apiFetch(`/api/admin/reports/${reportId}/resolve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action })
-      });
-      if (res.ok) {
-        fetchAdminReports();
-        fetchMemes();
+      if (action === 'delete_meme') {
+        const report = adminReports.find(r => r.id === reportId);
+        if (report) {
+          await supabase.from('memes').delete().eq('id', report.meme_id);
+        }
+      } else {
+        await supabase.from('reports').update({ status: 'resolved' }).eq('id', reportId);
       }
+      fetchAdminReports();
+      fetchMemes();
     } catch (err) {}
   };
 
   const handleDeleteMeme = async (id: string) => {
     if (!window.confirm('Tem certeza que deseja excluir esta publicação?')) return;
     try {
-      const res = await apiFetch(`/api/memes/${id}`, { method: 'DELETE' });
-      if (res.ok) {
-        fetchMemes();
-        setSelectedMeme(null);
-      } else {
-        const data = await res.json();
-        setError(data.error || 'Erro ao deletar publicação');
-      }
-    } catch (err) {
-      setError('Erro de conexão ao tentar deletar');
+      const { error } = await supabase.from('memes').delete().eq('id', id);
+      if (error) throw error;
+      fetchMemes();
+      setSelectedMeme(null);
+    } catch (err: any) {
+      setError(err.message || 'Erro de conexão ao tentar deletar');
     }
   };
 
@@ -929,7 +967,7 @@ export default function App() {
       <header className="sticky top-0 z-40 bg-zinc-950/80 backdrop-blur-md border-b border-zinc-800 transition-all duration-300">
         <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between gap-3 sm:gap-4 select-none">
           <div className="flex items-center gap-2 shrink-0">
-            <div className={`p-1 rounded-lg shadow-lg ${backendStatus === 'online' ? 'bg-green-500 shadow-green-900/20' : 'bg-red-500 shadow-red-900/20 animate-pulse'}`}>
+            <div className="p-1 rounded-lg shadow-lg bg-green-500 shadow-green-900/20">
               <ShieldAlert className="w-4 h-4 sm:w-5 sm:h-5 text-black" />
             </div>
             <div className="flex flex-col">
@@ -939,9 +977,6 @@ export default function App() {
                 setSearchTerm('');
                 setIsAdminPanelOpen(false);
               }}>OPMGG</h1>
-              {backendStatus === 'offline' && (
-                <span className="text-[6px] font-black text-red-500 uppercase tracking-widest mt-0.5">Offline</span>
-              )}
             </div>
           </div>
 
@@ -1175,44 +1210,6 @@ export default function App() {
 
           {/* Main Content */}
           <div className="flex-1 min-w-0">
-            <AnimatePresence>
-              {backendStatus === 'offline' && (
-                <motion.div 
-                  initial={{ opacity: 0, scale: 0.95 }} 
-                  animate={{ opacity: 1, scale: 1 }} 
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  className="mb-8 bg-gradient-to-br from-red-500/20 to-red-600/5 border border-red-500/30 rounded-[2.5rem] p-6 sm:p-10 flex flex-col md:flex-row items-center gap-8 shadow-2xl shadow-red-950/40 relative overflow-hidden group"
-                >
-                  <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none group-hover:rotate-12 transition-transform duration-700">
-                    <ShieldAlert className="w-32 h-32 text-red-500" />
-                  </div>
-                  
-                  <div className="w-20 h-20 bg-red-500 rounded-[2rem] flex items-center justify-center shrink-0 shadow-[0_0_40px_rgba(239,68,68,0.4)] z-10">
-                    <ShieldAlert className="w-10 h-10 text-black" />
-                  </div>
-                  
-                  <div className="text-center md:text-left flex-1 z-10">
-                    <h3 className="text-2xl font-black uppercase italic tracking-tighter text-red-500 mb-2">Backend Não Encontrado</h3>
-                    <p className="text-sm font-bold text-zinc-400 uppercase leading-relaxed max-w-2xl opacity-80">
-                      Você está visualizando a versão <span className="text-white">Estática</span> da aplicação. Se você publicou no <span className="text-white text-lg">Netlify</span>, saiba que ele não suporta o banco de dados e servidor Node necessários para este projeto. 
-                    </p>
-                    <div className="mt-4 flex flex-wrap justify-center md:justify-start gap-4">
-                      <div className="flex items-center gap-2 text-[10px] font-black text-red-400/60 uppercase tracking-widest bg-red-500/5 px-3 py-1.5 rounded-full border border-red-500/10">
-                        <AlertCircle className="w-3 h-3" />
-                        Status: Modo Offline Ativado
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <button 
-                    onClick={checkBackend} 
-                    className="px-8 py-4 bg-red-500 hover:bg-red-400 text-black font-black uppercase text-xs rounded-2xl transition-all active:scale-95 whitespace-nowrap shadow-xl shadow-red-900/20 z-10"
-                  >
-                    Tentar Reconectar
-                  </button>
-                </motion.div>
-              )}
-            </AnimatePresence>
 
             {selectedProfileId && (
               <div className="mb-6 flex items-center justify-between bg-green-500/10 border border-green-500/20 rounded-2xl px-6 py-3">
@@ -1267,18 +1264,14 @@ export default function App() {
                       
                       <button 
                         onClick={async () => {
-                          const res = await apiFetch('/api/admin/reward-rules', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                              metric: 'score',
-                              operator: '>=',
-                              value: 10,
-                              title_text: 'NOVO TÍTULO',
-                              title_color: '#22c55e'
-                            })
+                          const { error } = await supabase.from('reward_rules').insert({
+                            metric: 'score',
+                            operator: '>=',
+                            value: 10,
+                            title_text: 'NOVO TÍTULO',
+                            title_color: '#22c55e'
                           });
-                          if (res.ok) fetchRewardRules();
+                          if (!error) fetchRewardRules();
                         }}
                         className="bg-green-500 hover:bg-green-400 text-black px-4 py-2 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 transition-all shadow-lg shadow-green-900/20 active:scale-95"
                       >
@@ -1297,12 +1290,8 @@ export default function App() {
                                  <select 
                                    value={rule.metric} 
                                    onChange={async (e) => {
-                                     const res = await apiFetch(`/api/admin/reward-rules/${rule.id}`, {
-                                       method: 'PATCH',
-                                       headers: { 'Content-Type': 'application/json' },
-                                       body: JSON.stringify({ ...rule, metric: e.target.value })
-                                     });
-                                     if (res.ok) fetchRewardRules();
+                                     await supabase.from('reward_rules').update({ metric: e.target.value }).eq('id', rule.id);
+                                     fetchRewardRules();
                                    }}
                                    className="bg-transparent px-3 py-2 text-[10px] font-black uppercase text-white outline-none cursor-pointer hover:bg-zinc-800 transition-colors border-r border-zinc-800"
                                  >
@@ -1315,12 +1304,8 @@ export default function App() {
                                  <select 
                                    value={rule.operator}
                                    onChange={async (e) => {
-                                     const res = await apiFetch(`/api/admin/reward-rules/${rule.id}`, {
-                                       method: 'PATCH',
-                                       headers: { 'Content-Type': 'application/json' },
-                                       body: JSON.stringify({ ...rule, operator: e.target.value })
-                                     });
-                                     if (res.ok) fetchRewardRules();
+                                     await supabase.from('reward_rules').update({ operator: e.target.value }).eq('id', rule.id);
+                                     fetchRewardRules();
                                    }}
                                    className="bg-transparent px-3 py-2 text-[10px] font-black text-white outline-none cursor-pointer hover:bg-zinc-800 transition-colors border-r border-zinc-800"
                                  >
@@ -1334,12 +1319,8 @@ export default function App() {
                                    type="number"
                                    defaultValue={rule.value}
                                    onBlur={async (e) => {
-                                     const res = await apiFetch(`/api/admin/reward-rules/${rule.id}`, {
-                                       method: 'PATCH',
-                                       headers: { 'Content-Type': 'application/json' },
-                                       body: JSON.stringify({ ...rule, value: parseFloat(e.target.value) })
-                                     });
-                                     if (res.ok) fetchRewardRules();
+                                     await supabase.from('reward_rules').update({ value: parseFloat(e.target.value) }).eq('id', rule.id);
+                                     fetchRewardRules();
                                    }}
                                    className="w-16 bg-transparent px-3 py-2 text-[10px] font-black text-white outline-none focus:bg-zinc-800 transition-colors"
                                  />
@@ -1353,12 +1334,8 @@ export default function App() {
                                    placeholder="TEXTO DO TÍTULO"
                                    defaultValue={rule.title_text}
                                    onBlur={async (e) => {
-                                     const res = await apiFetch(`/api/admin/reward-rules/${rule.id}`, {
-                                       method: 'PATCH',
-                                       headers: { 'Content-Type': 'application/json' },
-                                       body: JSON.stringify({ ...rule, title_text: e.target.value })
-                                     });
-                                     if (res.ok) fetchRewardRules();
+                                     await supabase.from('reward_rules').update({ title_text: e.target.value }).eq('id', rule.id);
+                                     fetchRewardRules();
                                    }}
                                    className="bg-transparent px-4 py-2 text-[10px] font-black uppercase text-white outline-none focus:bg-zinc-800 transition-colors border-r border-zinc-800 w-32"
                                  />
@@ -1367,12 +1344,8 @@ export default function App() {
                                      type="color"
                                      defaultValue={rule.title_color}
                                      onChange={async (e) => {
-                                       const res = await apiFetch(`/api/admin/reward-rules/${rule.id}`, {
-                                         method: 'PATCH',
-                                         headers: { 'Content-Type': 'application/json' },
-                                         body: JSON.stringify({ ...rule, title_color: e.target.value })
-                                       });
-                                       if (res.ok) fetchRewardRules();
+                                       await supabase.from('reward_rules').update({ title_color: e.target.value }).eq('id', rule.id);
+                                       fetchRewardRules();
                                      }}
                                      className="w-8 h-8 bg-transparent border-none cursor-pointer opacity-0 absolute inset-0 z-10"
                                    />
@@ -1395,8 +1368,8 @@ export default function App() {
 
                             <button 
                               onClick={async () => {
-                                const res = await apiFetch(`/api/admin/reward-rules/${rule.id}`, { method: 'DELETE' });
-                                if (res.ok) fetchRewardRules();
+                                const { error } = await supabase.from('reward_rules').delete().eq('id', rule.id);
+                                if (!error) fetchRewardRules();
                               }}
                               className="w-10 h-10 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded-xl transition-all flex items-center justify-center group/del shadow-lg shadow-red-900/0 hover:shadow-red-900/20"
                             >
