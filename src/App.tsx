@@ -356,16 +356,20 @@ function AuthModal({ mode, setMode, setError, onSuccess, onClose }: { mode: 'log
         credentials: 'include'
       });
       
-      const resData = await res.json();
+      const resData = await res.json().catch(() => ({}));
       
       if (res.ok) {
         if (resData.token) localStorage.setItem('opmgg_token', resData.token);
         onSuccess(resData);
       } else {
-        setError(resData.error || 'Ocorreu um erro ao processar a solicitação.');
+        if (res.status === 404) {
+          setError('Backend não encontrado. Se você publicou no Netlify, saiba que esta aplicação requer um servidor Node.js (Full-Stack) para funcionar.');
+        } else {
+          setError(resData.error || 'Ocorreu um erro ao processar a solicitação.');
+        }
       }
     } catch (err: any) {
-      setError('Erro de conexão ou servidor fora do ar.');
+      setError('Erro de conexão. Verifique se o servidor backend está rodando.');
     }
   };
 
@@ -686,7 +690,12 @@ export default function App() {
       if (selectedProfileId) url.searchParams.append('userId', selectedProfileId);
       
       const res = await apiFetch(url.pathname + url.search);
-      const data = await res.json();
+      if (res.status === 404) {
+        setError('Servidor backend não encontrado em ' + window.location.origin + '. Esta aplicação requer um servidor Node.js operando para fornecer os dados.');
+        setMemes([]);
+        return [];
+      }
+      const data = await res.json().catch(() => ({ error: 'Dados inválidos do servidor' }));
       if (Array.isArray(data)) {
         setMemes(data);
         return data;

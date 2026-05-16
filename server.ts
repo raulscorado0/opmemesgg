@@ -141,12 +141,12 @@ app.use(session({
   name: 'opmgg.sid',
   proxy: true,
   cookie: { 
-    secure: true,
-    sameSite: 'none',
+    secure: isProduction, // Only secure in production
+    sameSite: isProduction ? 'none' : 'lax',
     httpOnly: true,
     maxAge: 30 * 24 * 60 * 60 * 1000,
     // @ts-ignore
-    partitioned: true
+    partitioned: isProduction
   }
 }));
 
@@ -263,10 +263,16 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-app.get('/api/auth/me', populateAuth, (req, res) => {
+app.get('/api/auth/me', populateAuth, (req: any, res) => {
   if (req.session.userId) {
     const user: any = db.prepare('SELECT id, username, role, badge_text, badge_color FROM users WHERE id = ?').get(req.session.userId);
-    res.json(user);
+    if (user) {
+      // Ensure session role is synced
+      req.session.role = user.role;
+      res.json(user);
+    } else {
+      res.status(401).json(null);
+    }
   } else {
     res.status(401).json(null);
   }
