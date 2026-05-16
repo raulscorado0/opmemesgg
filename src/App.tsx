@@ -30,7 +30,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { supabase } from './lib/supabase';
+import { supabase, isSupabaseConfigured, formatSupabaseError } from './lib/supabase';
 
 // --- Types ---
 export interface Meme {
@@ -343,38 +343,32 @@ function AuthModal({ mode, setMode, setError, onSuccess, onClose }: { mode: 'log
 
   const onSubmit = async (data: any) => {
     try {
-      if (mode === 'register') {
-        const { data: authData, error: authError } = await supabase.auth.signUp({
-          email: `${data.username.toLowerCase()}@opmgg.com`, // Fake email for simplicity, or user real email if schema updated
-          password: data.password,
-          options: {
-            data: { username: data.username }
-          }
-        });
-        if (authError) throw authError;
-        if (authData.user) {
-          // Profile is created via Trigger in Supabase (recommended) 
-          // or manually here if no trigger exists.
-          onSuccess({ id: authData.user.id, username: data.username, role: 'agent' });
-        }
-      } else {
-        const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+      const { data: authData, error: authError } = await (mode === 'register' ? 
+        supabase.auth.signUp({
           email: `${data.username.toLowerCase()}@opmgg.com`,
           password: data.password,
+          options: { data: { username: data.username } }
+        }) : 
+        supabase.auth.signInWithPassword({
+          email: `${data.username.toLowerCase()}@opmgg.com`,
+          password: data.password,
+        })
+      );
+
+      if (authError) throw authError;
+      
+      if (authData?.user) {
+        const { data: profile } = await supabase.from('profiles').select('*').eq('id', authData.user.id).maybeSingle();
+        onSuccess({ 
+          id: authData.user.id, 
+          username: profile?.username || data.username, 
+          role: profile?.role || 'agent' 
         });
-        if (authError) throw authError;
-        if (authData.user) {
-          // Fetch profile
-          const { data: profile } = await supabase.from('profiles').select('*').eq('id', authData.user.id).single();
-          onSuccess({ 
-            id: authData.user.id, 
-            username: profile?.username || data.username, 
-            role: profile?.role || 'agent' 
-          });
-        }
+      } else {
+        throw new Error('Não foi possível obter os dados do usuário.');
       }
     } catch (err: any) {
-      setError(err.message || 'Erro durante a autenticação.');
+      setError(formatSupabaseError(err));
     }
   };
 
@@ -661,7 +655,11 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!isSupabaseConfigured()) {
+      setError('Supabase não configurado. Por favor, adicione VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY nas Configurações (Settings).');
+    }
     fetchUser();
+    fetchRewardRules();
     fetchMemes().then((fetchedMemes) => {
       const params = new URLSearchParams(window.location.search);
       const memeId = params.get('meme');
@@ -683,13 +681,28 @@ export default function App() {
 
   const fetchUser = async () => {
     try {
-      const { data: { user: authUser } } = await supabase.auth.getUser();
+      const { data, error: authError } = await supabase.auth.getUser();
+      
+      // If there is no session, authError may contain a message about missing session.
+      // We only care if data.user exists.
+      const authUser = data?.user;
+      
       if (authUser) {
-        const { data: profile } = await supabase
+        let { data: profile } = await supabase
           .from('profiles')
           .select('*')
           .eq('id', authUser.id)
-          .single();
+          .maybeSingle();
+        
+        if (!profile && authUser.user_metadata?.username) {
+          const { data: newProfile, error: insertError } = await supabase.from('profiles').insert({
+            id: authUser.id,
+            username: authUser.user_metadata.username,
+            role: 'agent'
+          }).select().single();
+          
+          if (!insertError) profile = newProfile;
+        }
         
         setUser({
           id: authUser.id,
@@ -700,7 +713,8 @@ export default function App() {
         });
       }
     } catch (err) {
-      console.error('Session check failed', err);
+      // Only log if it's a real unexpected error, not just "not logged in"
+      console.debug('Session check (guest)', err);
     } finally {
       setLoading(false);
     }
@@ -712,7 +726,7 @@ export default function App() {
         .from('memes')
         .select(`
           *,
-          profiles:posted_by_id (badge_text, badge_color)
+          profiles(badge_text, badge_color)
         `);
 
       if (selectedTag) query = query.contains('tags', [selectedTag]);
@@ -722,8 +736,14 @@ export default function App() {
       else query = query.order('created_at', { ascending: false });
 
       const { data, error: fetchError } = await query;
-      if (fetchError) throw fetchError;
+      
+      if (fetchError || !data) {
+        const msg = formatSupabaseError(fetchError);
+        setError(msg);
+        throw fetchError;
+      }
 
+      setError(null);
       const formattedMemes = (data || []).map((m: any) => ({
         ...m,
         id: m.id,
@@ -731,7 +751,7 @@ export default function App() {
         author: m.author,
         postedBy: m.posted_by,
         postedById: m.posted_by_id,
-        postedAt: m.created_at || m.posted_at,
+        postedAt: m.created_at || m.posted_at || new Date().toISOString(),
         fileUrl: m.file_url,
         fileType: m.file_type,
         tags: m.tags || [],
@@ -747,7 +767,7 @@ export default function App() {
       return formattedMemes;
     } catch (err) {
       console.error('Fetch memes failed', err);
-      // Fallback empty state
+      setError(formatSupabaseError(err));
       setMemes([]);
       return [];
     }
@@ -828,7 +848,7 @@ export default function App() {
       const { data } = await supabase
         .from('reward_rules')
         .select('*')
-        .order('created_at', { ascending: true });
+        .order('id', { ascending: true });
       
       if (data) setRewardRules(data as RewardRule[]);
     } catch (err) {}
