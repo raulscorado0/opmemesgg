@@ -105,3 +105,10 @@ CREATE POLICY "Authorized users can insert memes" ON public.memes FOR INSERT WIT
 CREATE POLICY "Authors can delete their own memes" ON public.memes FOR DELETE USING (auth.uid() = posted_by_id);
 CREATE POLICY "Authenticated users can vote" ON public.votes FOR ALL USING (auth.uid() = user_id);
 CREATE POLICY "Authenticated users can report" ON public.reports FOR INSERT WITH CHECK (auth.role() = 'authenticated');
+
+-- --- DICAS DE MIGRAÇÃO (Caso já tenha tabelas) ---
+-- Se você receber erros de 'column not found', execute estes comandos para atualizar:
+-- ALTER TABLE public.memes ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL;
+-- ALTER TABLE public.memes ADD COLUMN IF NOT EXISTS posted_by_id UUID REFERENCES public.profiles(id);
+-- ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS badge_text TEXT;
+-- ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS badge_color TEXT;

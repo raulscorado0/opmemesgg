@@ -45,7 +45,11 @@ export const formatSupabaseError = (err: any): string => {
   }
   
   if (msg.includes('relation') || msg.includes('not found')) {
-    return 'Estrutura do banco não encontrada. Você aplicou o SQL no editor do Supabase?';
+    return 'Estrutura do banco não encontrada. Você aplicou o SQL contido no arquivo SUPABASE_SETUP.sql no editor do Supabase?';
+  }
+
+  if (msg.includes('column') && msg.includes('created_at')) {
+    return 'Erro: A coluna "created_at" não foi encontrada. Certifique-se de executar o SQL do arquivo SUPABASE_SETUP.sql para atualizar suas tabelas.';
   }
 
   if (msg.includes('Invalid login credentials')) {

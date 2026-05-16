@@ -180,7 +180,7 @@ const MemeCard: React.FC<MemeCardProps> = ({ meme, user, rewardRules, onAuthRequ
         .select('value')
         .eq('meme_id', meme.id)
         .eq('user_id', user.id)
-        .single();
+        .maybeSingle();
 
       if (existingVote && existingVote.value === value) {
         await supabase.from('votes').delete().eq('meme_id', meme.id).eq('user_id', user.id);
@@ -726,7 +726,7 @@ export default function App() {
         .from('memes')
         .select(`
           *,
-          profiles(badge_text, badge_color)
+          profiles:posted_by_id(badge_text, badge_color)
         `);
 
       if (selectedTag) query = query.contains('tags', [selectedTag]);
