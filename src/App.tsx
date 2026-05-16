@@ -323,9 +323,15 @@ const MemeCard: React.FC<MemeCardProps> = ({ meme, user, rewardRules, onAuthRequ
                   <motion.span 
                     initial={{ opacity: 0, scale: 0.8 }}
                     animate={{ opacity: 1, scale: 1 }}
+                    whileHover={{ scale: 1.1, filter: 'brightness(1.2)' }}
                     key={idx}
-                    className="px-1.5 py-0.5 rounded-[4px] text-[7px] font-black uppercase border bg-zinc-950 shrink-0 shadow-sm transition-all hover:scale-110 cursor-default"
-                    style={{ borderColor: badge.color + '40', color: badge.color, boxShadow: `0 0 10px ${badge.color}10` }}
+                    className="px-1.5 py-0.5 rounded-[4px] text-[7px] font-black uppercase border bg-zinc-950 shrink-0 shadow-sm transition-all cursor-default"
+                    style={{ 
+                      borderColor: badge.color + '40', 
+                      color: badge.color, 
+                      boxShadow: `0 0 12px ${badge.color}15`,
+                      textShadow: `0 0 8px ${badge.color}40`
+                    }}
                   >
                     {badge.text}
                   </motion.span>
@@ -648,8 +654,10 @@ export default function App() {
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
   const [userSearchResults, setUserSearchResults] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [backendStatus, setBackendStatus] = useState<'online' | 'offline' | 'checking'>('checking');
 
   useEffect(() => {
+    checkBackend();
     fetchUser();
     fetchMemes().then((fetchedMemes) => {
       const params = new URLSearchParams(window.location.search);
@@ -660,6 +668,16 @@ export default function App() {
       }
     });
   }, []);
+
+  const checkBackend = async () => {
+    try {
+      const res = await fetch('/api/health');
+      if (res.ok) setBackendStatus('online');
+      else setBackendStatus('offline');
+    } catch (err) {
+      setBackendStatus('offline');
+    }
+  };
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(searchTerm), 300);
@@ -911,15 +929,20 @@ export default function App() {
       <header className="sticky top-0 z-40 bg-zinc-950/80 backdrop-blur-md border-b border-zinc-800 transition-all duration-300">
         <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between gap-3 sm:gap-4 select-none">
           <div className="flex items-center gap-2 shrink-0">
-            <div className="bg-green-500 p-1 rounded-lg shadow-lg shadow-green-900/20">
+            <div className={`p-1 rounded-lg shadow-lg ${backendStatus === 'online' ? 'bg-green-500 shadow-green-900/20' : 'bg-red-500 shadow-red-900/20 animate-pulse'}`}>
               <ShieldAlert className="w-4 h-4 sm:w-5 sm:h-5 text-black" />
             </div>
-            <h1 className="text-base sm:text-xl font-black italic uppercase tracking-tighter hidden xs:block font-display cursor-pointer" onClick={() => {
-              setSelectedProfileId(null);
-              setSelectedTag('');
-              setSearchTerm('');
-              setIsAdminPanelOpen(false);
-            }}>OPMGG</h1>
+            <div className="flex flex-col">
+              <h1 className="text-sm sm:text-lg font-black italic uppercase tracking-tighter leading-none xs:block font-display cursor-pointer" onClick={() => {
+                setSelectedProfileId(null);
+                setSelectedTag('');
+                setSearchTerm('');
+                setIsAdminPanelOpen(false);
+              }}>OPMGG</h1>
+              {backendStatus === 'offline' && (
+                <span className="text-[6px] font-black text-red-500 uppercase tracking-widest mt-0.5">Offline</span>
+              )}
+            </div>
           </div>
 
           <div className="flex-1 max-w-sm relative">
@@ -1152,6 +1175,45 @@ export default function App() {
 
           {/* Main Content */}
           <div className="flex-1 min-w-0">
+            <AnimatePresence>
+              {backendStatus === 'offline' && (
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.95 }} 
+                  animate={{ opacity: 1, scale: 1 }} 
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  className="mb-8 bg-gradient-to-br from-red-500/20 to-red-600/5 border border-red-500/30 rounded-[2.5rem] p-6 sm:p-10 flex flex-col md:flex-row items-center gap-8 shadow-2xl shadow-red-950/40 relative overflow-hidden group"
+                >
+                  <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none group-hover:rotate-12 transition-transform duration-700">
+                    <ShieldAlert className="w-32 h-32 text-red-500" />
+                  </div>
+                  
+                  <div className="w-20 h-20 bg-red-500 rounded-[2rem] flex items-center justify-center shrink-0 shadow-[0_0_40px_rgba(239,68,68,0.4)] z-10">
+                    <ShieldAlert className="w-10 h-10 text-black" />
+                  </div>
+                  
+                  <div className="text-center md:text-left flex-1 z-10">
+                    <h3 className="text-2xl font-black uppercase italic tracking-tighter text-red-500 mb-2">Backend Não Encontrado</h3>
+                    <p className="text-sm font-bold text-zinc-400 uppercase leading-relaxed max-w-2xl opacity-80">
+                      Você está visualizando a versão <span className="text-white">Estática</span> da aplicação. Se você publicou no <span className="text-white text-lg">Netlify</span>, saiba que ele não suporta o banco de dados e servidor Node necessários para este projeto. 
+                    </p>
+                    <div className="mt-4 flex flex-wrap justify-center md:justify-start gap-4">
+                      <div className="flex items-center gap-2 text-[10px] font-black text-red-400/60 uppercase tracking-widest bg-red-500/5 px-3 py-1.5 rounded-full border border-red-500/10">
+                        <AlertCircle className="w-3 h-3" />
+                        Status: Modo Offline Ativado
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <button 
+                    onClick={checkBackend} 
+                    className="px-8 py-4 bg-red-500 hover:bg-red-400 text-black font-black uppercase text-xs rounded-2xl transition-all active:scale-95 whitespace-nowrap shadow-xl shadow-red-900/20 z-10"
+                  >
+                    Tentar Reconectar
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
             {selectedProfileId && (
               <div className="mb-6 flex items-center justify-between bg-green-500/10 border border-green-500/20 rounded-2xl px-6 py-3">
                 <div className="flex items-center gap-3">

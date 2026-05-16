@@ -96,6 +96,23 @@ db.exec(`
   );
 `);
 
+// Default Reward Rules
+const existingRules = (db.prepare('SELECT COUNT(*) as count FROM reward_rules').get() as any);
+if (existingRules.count === 0) {
+  const defaultRules = [
+    { id: 'rule_1', metric: 'score', operator: '>=', value: 100, title_text: 'LENDA', title_color: '#fbbf24' },
+    { id: 'rule_2', metric: 'memes', operator: '>=', value: 10, title_text: 'CONTRIBUINTE', title_color: '#34d399' },
+    { id: 'rule_3', metric: 'views', operator: '>=', value: 500, title_text: 'VIRAL', title_color: '#a78bfa' },
+    { id: 'rule_4', metric: 'votes', operator: '>=', value: 50, title_text: 'CRÍTICO', title_color: '#f87171' },
+    { id: 'rule_5', metric: 'engagement', operator: '>=', value: 20, title_text: 'RELEVANTE', title_color: '#60a5fa' }
+  ];
+  const stmt = db.prepare('INSERT INTO reward_rules (id, metric, operator, value, title_text, title_color) VALUES (?, ?, ?, ?, ?, ?)');
+  for (const rule of defaultRules) {
+    stmt.run(rule.id, rule.metric, rule.operator, rule.value, rule.title_text, rule.title_color);
+  }
+}
+
+
 // --- Migrations for existing DB ---
 try { db.exec('ALTER TABLE memes ADD COLUMN description TEXT;'); } catch(e) {}
 try { db.exec('ALTER TABLE memes ADD COLUMN views INTEGER DEFAULT 0;'); } catch(e) {}
