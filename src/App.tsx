@@ -17,6 +17,8 @@ import {
   Play,
   Pause,
   Flag,
+  Zap,
+  Trophy,
   ArrowBigUp,
   ArrowBigDown,
   ChevronRight,
@@ -47,6 +49,10 @@ export interface Meme {
   reports: number;
   badge_text?: string;
   badge_color?: string;
+  userTotalScore?: number;
+  userTotalViews?: number;
+  userMemeCount?: number;
+  userVotesGiven?: number;
 }
 
 export interface User {
@@ -55,14 +61,18 @@ export interface User {
   role: 'agent' | 'admin';
   badge_text?: string;
   badge_color?: string;
+  totalScore?: number;
+  totalViews?: number;
+  memeCount?: number;
+  votesGiven?: number;
 }
 
 // --- Tutorial Data ---
 const TUTORIAL_STEPS = [
-  { title: 'BEM-VINDO, AGENTE', content: 'Esta é a base de transmissões ultra-secretas do OPMGG. Aqui você pode compartilhar e curtir memes vindos de todo o multiverso.' },
-  { title: 'COMO TRANSMITIR', content: 'Clique no botão "POSTAR" no topo. Você pode enviar imagens, vídeos ou até gravar áudios curtos diretamente do seu microfone.' },
-  { title: 'SISTEMA DE VOTação', content: 'Use as setas para cima ou para baixo para classificar o conteúdo. Transmissões com muitos pontos aparecem no topo do "TRENDING".' },
-  { title: 'RECOMPENSAS', content: 'Administradores podem conceder selos e títulos ao lado dos nomes dos agentes mais produtivos. Fique atento!' }
+  { title: 'BEM-VINDO AO OPMGG', content: 'Esta é uma plataforma para compartilhar e descobrir memes. Aqui você pode navegar pelas últimas tendências.' },
+  { title: 'COMO POSTAR', content: 'Clique no botão "POSTAR" no topo. Suportamos imagens, vídeos e áudios enviados da sua galeria ou gravados na hora.' },
+  { title: 'VOTAÇÃO E RANKING', content: 'Use as setas para votar. Memes com boa pontuação sobem para a aba "Trending" e ganham mais destaque.' },
+  { title: 'SISTEMA DE TÍTULOS', content: 'Usuários ativos ganham títulos automáticos baseados em seus memes, visualizações e pontuação total. Confira os requisitos no seu perfil!' }
 ];
 
 // --- Form Schemas ---
@@ -105,13 +115,55 @@ const apiFetch = async (url: string, options: any = {}) => {
 interface MemeCardProps {
   meme: Meme;
   user: User | null;
+  rewardRules: RewardRule[];
   onAuthRequired: () => void;
   onUpdate: () => void | Promise<void>;
   onOpenDetails: (meme: Meme) => void;
   onProfileSelect: (userId: string | null) => void;
 }
 
-const MemeCard: React.FC<MemeCardProps> = ({ meme, user, onAuthRequired, onUpdate, onOpenDetails, onProfileSelect }) => {
+export interface RewardRule {
+  id: string;
+  metric: 'memes' | 'views' | 'score' | 'votes' | 'engagement';
+  operator: '>' | '=' | '<' | '>=' | '<=';
+  value: number;
+  title_text: string;
+  title_color: string;
+}
+
+const getFameBadges = (meme: Meme, rules: RewardRule[]) => {
+  const score = meme.userTotalScore || 0;
+  const views = meme.userTotalViews || 0;
+  const count = meme.userMemeCount || 0;
+  const votes = meme.userVotesGiven || 0;
+  const engagement = count > 0 ? (views / count) : 0;
+
+  const badges: { text: string; color: string }[] = [];
+
+  rules.forEach(rule => {
+    let metricValue = 0;
+    if (rule.metric === 'memes') metricValue = count;
+    else if (rule.metric === 'views') metricValue = views;
+    else if (rule.metric === 'score') metricValue = score;
+    else if (rule.metric === 'votes') metricValue = votes;
+    else if (rule.metric === 'engagement') metricValue = engagement;
+
+    let match = false;
+    if (rule.operator === '>') match = metricValue > rule.value;
+    else if (rule.operator === '>=') match = metricValue >= rule.value;
+    else if (rule.operator === '=') match = metricValue === rule.value;
+    else if (rule.operator === '<') match = metricValue < rule.value;
+    else if (rule.operator === '<=') match = metricValue <= rule.value;
+
+    if (match) {
+      badges.push({ text: rule.title_text, color: rule.title_color });
+    }
+  });
+
+  return badges;
+};
+
+const MemeCard: React.FC<MemeCardProps> = ({ meme, user, rewardRules, onAuthRequired, onUpdate, onOpenDetails, onProfileSelect }) => {
   const [isVoting, setIsVoting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
@@ -220,38 +272,38 @@ const MemeCard: React.FC<MemeCardProps> = ({ meme, user, onAuthRequired, onUpdat
         )}
       </div>
 
-      <div className="p-5">
+      <div className="p-4">
         <div className="flex items-start justify-between gap-2">
           <div>
-            <h3 className="font-bold italic uppercase leading-tight text-base sm:text-lg group-hover:text-green-500 transition-colors line-clamp-2 tracking-tight font-display">{meme.title}</h3>
-            <div className="flex items-center gap-2 mt-2">
-              <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider opacity-60">Origem: {meme.author}</p>
+            <h3 className="font-bold italic uppercase leading-tight text-sm sm:text-base group-hover:text-green-500 transition-colors line-clamp-2 tracking-tight font-display">{meme.title}</h3>
+            <div className="flex items-center gap-2 mt-1.5">
+              <p className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider opacity-60">Origem: {meme.author}</p>
               <div className="w-1 h-1 bg-zinc-800 rounded-full" />
-              <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider opacity-60">{meme.views} visualizações</p>
+              <p className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider opacity-60">{meme.views} visualizações</p>
             </div>
           </div>
-          <div className="flex flex-col items-center gap-1 shrink-0 bg-zinc-950/50 p-2 rounded-2xl border border-zinc-800/50">
+          <div className="flex flex-col items-center gap-0.5 shrink-0 bg-zinc-950/50 p-1.5 rounded-xl border border-zinc-800/50">
             <button 
               onClick={(e) => handleVote(1, e)} 
               disabled={isVoting} 
-              className={`p-1 rounded-lg transition-all ${meme.userVote === 1 ? 'text-green-500 bg-green-500/10' : 'text-zinc-600 hover:text-green-400'}`}
+              className={`p-0.5 rounded-lg transition-all ${meme.userVote === 1 ? 'text-green-500 bg-green-500/10' : 'text-zinc-600 hover:text-green-400'}`}
             >
-              <ArrowBigUp className={`w-6 h-6 ${meme.userVote === 1 ? 'fill-current' : ''}`} />
+              <ArrowBigUp className={`w-5 h-5 ${meme.userVote === 1 ? 'fill-current' : ''}`} />
             </button>
-            <span className={`text-xs font-black min-w-[20px] text-center ${meme.score > 0 ? 'text-green-500' : meme.score < 0 ? 'text-red-500' : 'text-zinc-400'}`}>
+            <span className={`text-[10px] font-black min-w-[16px] text-center ${meme.score > 0 ? 'text-green-500' : meme.score < 0 ? 'text-red-500' : 'text-zinc-400'}`}>
               {meme.score}
             </span>
             <button 
               onClick={(e) => handleVote(-1, e)} 
               disabled={isVoting} 
-              className={`p-1 rounded-lg transition-all ${meme.userVote === -1 ? 'text-red-500 bg-red-500/10' : 'text-zinc-600 hover:text-red-400'}`}
+              className={`p-0.5 rounded-lg transition-all ${meme.userVote === -1 ? 'text-red-500 bg-red-500/10' : 'text-zinc-600 hover:text-red-400'}`}
             >
-              <ArrowBigDown className={`w-6 h-6 ${meme.userVote === -1 ? 'fill-current' : ''}`} />
+              <ArrowBigDown className={`w-5 h-5 ${meme.userVote === -1 ? 'fill-current' : ''}`} />
             </button>
           </div>
         </div>
         
-        <div className="mt-5 pt-4 border-t border-zinc-800/50 flex items-center justify-between">
+        <div className="mt-4 pt-3 border-t border-zinc-800/50 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div 
               onClick={(e) => { e.stopPropagation(); onProfileSelect(meme.postedById); }}
@@ -260,14 +312,25 @@ const MemeCard: React.FC<MemeCardProps> = ({ meme, user, onAuthRequired, onUpdat
               <UserIcon className="w-3.5 h-3.5 text-green-500" />
             </div>
             <div className="flex flex-col">
-              <p className="text-[10px] text-zinc-300 font-bold uppercase flex items-center gap-1.5">
+              <p className="text-[10px] text-zinc-300 font-bold uppercase flex items-center flex-wrap gap-1.5">
                 <span onClick={(e) => { e.stopPropagation(); onProfileSelect(meme.postedById); }} className="hover:text-green-500 transition-colors cursor-pointer">{meme.postedBy}</span>
                 {meme.badge_text && (
-                  <span className={`px-1.5 py-0.5 rounded-[4px] text-[7px] font-black uppercase text-black ring-1 ring-white/10`} style={{ backgroundColor: meme.badge_color || '#22c55e' }}>
+                  <span className={`px-1.5 py-0.5 rounded-[4px] text-[7px] font-black uppercase text-black ring-1 ring-white/10 shrink-0`} style={{ backgroundColor: meme.badge_color || '#22c55e' }}>
                     {meme.badge_text}
                   </span>
                 )}
-                {user?.role === 'admin' && meme.postedById === user.id && <span className="bg-green-500 text-black px-1 rounded-[2px] text-[8px]">ADM</span>}
+                {getFameBadges(meme, rewardRules).map((badge, idx) => (
+                  <motion.span 
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    key={idx}
+                    className="px-1.5 py-0.5 rounded-[4px] text-[7px] font-black uppercase border bg-zinc-950 shrink-0 shadow-sm transition-all hover:scale-110 cursor-default"
+                    style={{ borderColor: badge.color + '40', color: badge.color, boxShadow: `0 0 10px ${badge.color}10` }}
+                  >
+                    {badge.text}
+                  </motion.span>
+                ))}
+                {user?.role === 'admin' && meme.postedById === user.id && <span className="bg-green-500 text-black px-1 rounded-[2px] text-[8px] font-black italic">OP</span>}
               </p>
               <p className="text-[9px] text-zinc-600 font-bold uppercase">{new Date(meme.postedAt).toLocaleDateString('pt-BR')}</p>
             </div>
@@ -461,8 +524,8 @@ function PostModal({ onClose, user, setError, onSuccess }: { onClose: () => void
         </button>
 
         <div className="mb-4 sm:mb-8 shrink-0">
-          <h2 className="text-2xl sm:text-3xl font-black italic uppercase tracking-tighter font-display">NOVA PUBLICAÇÃO</h2>
-          <p className="text-zinc-500 text-[10px] sm:text-sm mt-1 uppercase font-bold tracking-widest opacity-60">Status: TRANSMITINDO PARA A BASE</p>
+          <h2 className="text-2xl sm:text-3xl font-black italic uppercase tracking-tighter font-display">NOVA POSTAGEM</h2>
+          <p className="text-zinc-500 text-[10px] sm:text-sm mt-1 uppercase font-bold tracking-widest opacity-60">Status: AGUARDANDO ENVIO</p>
         </div>
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-6 overflow-y-auto no-scrollbar pr-1 pb-4">
@@ -576,6 +639,7 @@ export default function App() {
   const [reportReason, setReportReason] = useState('');
   const [adminReports, setAdminReports] = useState<any[]>([]);
   const [adminUsers, setAdminUsers] = useState<User[]>([]);
+  const [rewardRules, setRewardRules] = useState<RewardRule[]>([]);
   const [adminSearchTerm, setAdminSearchTerm] = useState('');
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
   const [userSearchResults, setUserSearchResults] = useState<any[]>([]);
@@ -693,10 +757,21 @@ export default function App() {
     } catch (err) {}
   };
 
+  const fetchRewardRules = async () => {
+    try {
+      const res = await apiFetch('/api/admin/reward-rules');
+      if (res.ok) {
+        const data = await res.json();
+        setRewardRules(data);
+      }
+    } catch (err) {}
+  };
+
   useEffect(() => {
     if (isAdminPanelOpen) {
       fetchAdminReports();
       fetchAdminUsers();
+      fetchRewardRules();
     }
   }, [isAdminPanelOpen]);
 
@@ -786,7 +861,7 @@ export default function App() {
         setSelectedMeme(null);
       } else {
         const data = await res.json();
-        setError(data.error || 'Erro ao deletar transmissão');
+        setError(data.error || 'Erro ao deletar publicação');
       }
     } catch (err) {
       setError('Erro de conexão ao tentar deletar');
@@ -825,12 +900,17 @@ export default function App() {
       </AnimatePresence>
 
       <header className="sticky top-0 z-40 bg-zinc-950/80 backdrop-blur-md border-b border-zinc-800 transition-all duration-300">
-        <div className="max-w-7xl mx-auto px-4 h-16 sm:h-20 flex items-center justify-between gap-3 sm:gap-4 select-none">
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-            <div className="bg-green-500 p-1.5 sm:p-2 rounded-xl shadow-lg shadow-green-900/20">
-              <ShieldAlert className="w-5 h-5 sm:w-6 sm:h-6 text-black" />
+        <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between gap-3 sm:gap-4 select-none">
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="bg-green-500 p-1 rounded-lg shadow-lg shadow-green-900/20">
+              <ShieldAlert className="w-4 h-4 sm:w-5 sm:h-5 text-black" />
             </div>
-            <h1 className="text-lg sm:text-2xl font-black italic uppercase tracking-tighter hidden xs:block font-display">OPMGG</h1>
+            <h1 className="text-base sm:text-xl font-black italic uppercase tracking-tighter hidden xs:block font-display cursor-pointer" onClick={() => {
+              setSelectedProfileId(null);
+              setSelectedTag('');
+              setSearchTerm('');
+              setIsAdminPanelOpen(false);
+            }}>OPMGG</h1>
           </div>
 
           <div className="flex-1 max-w-sm relative">
@@ -844,7 +924,7 @@ export default function App() {
             />
             {userSearchResults.length > 0 && (
               <div className="absolute top-full mt-2 left-0 w-full bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden z-50">
-                <p className="px-4 py-2 text-[8px] font-black text-zinc-600 uppercase border-b border-zinc-800">AGENTES ENCONTRADOS</p>
+                <p className="px-4 py-2 text-[8px] font-black text-zinc-600 uppercase border-b border-zinc-800">USUÁRIOS ENCONTRADOS</p>
                 {userSearchResults.map(u => (
                   <button 
                     key={u.id}
@@ -859,15 +939,16 @@ export default function App() {
                       <UserIcon className="w-4 h-4 text-zinc-500" />
                     </div>
                     <div>
-                      <p className="text-xs font-bold uppercase text-white flex items-center gap-2">
+                      <p className="text-xs font-bold uppercase text-white flex items-center flex-wrap gap-2">
                         {u.username}
                         {u.badge_text && (
                           <span className="px-1 py-0.5 rounded-[3px] text-[6px] font-black uppercase text-black" style={{ backgroundColor: u.badge_color || '#22c55e' }}>
                             {u.badge_text}
                           </span>
                         )}
+                        {/* Note: search results don't have enough info for fame badge directly, but we can add it later if needed */}
                       </p>
-                      <p className="text-[8px] font-bold text-zinc-500 uppercase tracking-widest">Base de Transmissão</p>
+                      <p className="text-[8px] font-bold text-zinc-500 uppercase tracking-widest">Perfil do Usuário</p>
                     </div>
                   </button>
                 ))}
@@ -931,7 +1012,7 @@ export default function App() {
                   <CheckCircle2 className="w-4 h-4" />
                 </div>
                 <div className="text-left">
-                  <p className="text-[10px] font-black uppercase tracking-tight">Manual de Transmissão</p>
+                  <p className="text-[10px] font-black uppercase tracking-tight">Tutorial de Uso</p>
                   <p className="text-[8px] font-medium text-zinc-600 group-hover:text-green-500/60 uppercase">Dicas para Iniciantes</p>
                 </div>
               </button>
@@ -944,10 +1025,23 @@ export default function App() {
                   <div className="p-2 rounded-xl bg-red-400/10"><X className="w-4 h-4" /></div>
                   <div className="text-left">
                     <p className="text-[10px] font-black uppercase tracking-tight">Limpar Filtro de Perfil</p>
-                    <p className="text-[8px] font-medium opacity-60 uppercase">Vendo apenas memes de {memes.find(m => m.postedById === selectedProfileId)?.postedBy || 'Agente'}</p>
+                    <p className="text-[8px] font-medium opacity-60 uppercase">Vendo apenas memes de {memes.find(m => m.postedById === selectedProfileId)?.postedBy || 'Usuário'}</p>
                   </div>
                 </button>
               )}
+            </div>
+
+            <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] p-4 sm:p-5 shadow-xl">
+              <h4 className="text-[9px] font-black uppercase text-zinc-600 tracking-widest mb-4 px-2">BUSCAR USUÁRIOS</h4>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-600" />
+                <input 
+                  type="text" 
+                  placeholder="Pesquisar..." 
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-2xl pl-9 pr-4 py-2.5 text-[9px] font-bold uppercase transition-all focus:ring-1 ring-green-500/30 outline-none text-zinc-300"
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+              </div>
             </div>
 
             <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] p-4 sm:p-5 shadow-xl overflow-hidden">
@@ -1049,6 +1143,20 @@ export default function App() {
 
           {/* Main Content */}
           <div className="flex-1 min-w-0">
+            {selectedProfileId && (
+              <div className="mb-6 flex items-center justify-between bg-green-500/10 border border-green-500/20 rounded-2xl px-6 py-3">
+                <div className="flex items-center gap-3">
+                  <UserIcon className="w-4 h-4 text-green-500" />
+                  <p className="text-[10px] font-black uppercase text-green-500 tracking-widest">Visualizando Publicações do Usuário</p>
+                </div>
+                <button 
+                  onClick={() => setSelectedProfileId(null)}
+                  className="text-[10px] font-black uppercase text-zinc-500 hover:text-white transition-colors"
+                >
+                  Limpar Filtro
+                </button>
+              </div>
+            )}
             <AnimatePresence>
               {error && (
                 <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="mb-6 overflow-hidden">
@@ -1075,14 +1183,175 @@ export default function App() {
 
                 <div className="grid grid-cols-1 gap-8">
                   <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-8 shadow-xl">
+                    <div className="flex items-center justify-between mb-8">
+                      <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 bg-amber-500/10 rounded-2xl flex items-center justify-center text-amber-500 shadow-lg shadow-amber-900/10">
+                          <Trophy className="w-6 h-6" />
+                        </div>
+                        <div>
+                          <h3 className="text-lg font-black italic uppercase tracking-tighter">Títulos Automáticos</h3>
+                          <p className="text-xs text-zinc-500 font-bold uppercase tracking-widest opacity-60">Regras de reconecimento dinâmico</p>
+                        </div>
+                      </div>
+                      
+                      <button 
+                        onClick={async () => {
+                          const res = await apiFetch('/api/admin/reward-rules', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              metric: 'score',
+                              operator: '>=',
+                              value: 10,
+                              title_text: 'NOVO TÍTULO',
+                              title_color: '#22c55e'
+                            })
+                          });
+                          if (res.ok) fetchRewardRules();
+                        }}
+                        className="bg-green-500 hover:bg-green-400 text-black px-4 py-2 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 transition-all shadow-lg shadow-green-900/20 active:scale-95"
+                      >
+                        <Plus className="w-4 h-4" />
+                        ADIcionar regra
+                      </button>
+                    </div>
+
+                    <div className="space-y-4">
+                      {rewardRules.map(rule => (
+                        <div key={rule.id} className="bg-zinc-950 border border-zinc-800 rounded-3xl p-6 flex flex-wrap items-center justify-between gap-6 group hover:border-zinc-700 transition-colors">
+                          <div className="flex flex-wrap items-center gap-4">
+                             <div className="flex items-center gap-2">
+                               <span className="text-[10px] font-black uppercase text-zinc-600">CONDIÇÃO</span>
+                               <div className="flex items-center bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-inner">
+                                 <select 
+                                   value={rule.metric} 
+                                   onChange={async (e) => {
+                                     const res = await apiFetch(`/api/admin/reward-rules/${rule.id}`, {
+                                       method: 'PATCH',
+                                       headers: { 'Content-Type': 'application/json' },
+                                       body: JSON.stringify({ ...rule, metric: e.target.value })
+                                     });
+                                     if (res.ok) fetchRewardRules();
+                                   }}
+                                   className="bg-transparent px-3 py-2 text-[10px] font-black uppercase text-white outline-none cursor-pointer hover:bg-zinc-800 transition-colors border-r border-zinc-800"
+                                 >
+                                   <option value="memes">MEMES POSTADOS</option>
+                                   <option value="views">TOTAL VIEWS</option>
+                                   <option value="score">PONTUAÇÃO</option>
+                                   <option value="votes">VOTOS DADOS</option>
+                                   <option value="engagement">ENGAJAMENTO (MÉDIO)</option>
+                                 </select>
+                                 <select 
+                                   value={rule.operator}
+                                   onChange={async (e) => {
+                                     const res = await apiFetch(`/api/admin/reward-rules/${rule.id}`, {
+                                       method: 'PATCH',
+                                       headers: { 'Content-Type': 'application/json' },
+                                       body: JSON.stringify({ ...rule, operator: e.target.value })
+                                     });
+                                     if (res.ok) fetchRewardRules();
+                                   }}
+                                   className="bg-transparent px-3 py-2 text-[10px] font-black text-white outline-none cursor-pointer hover:bg-zinc-800 transition-colors border-r border-zinc-800"
+                                 >
+                                   <option value=">">&gt;</option>
+                                   <option value=">=">&ge;</option>
+                                   <option value="=">=</option>
+                                   <option value="<">&lt;</option>
+                                   <option value="<=">&le;</option>
+                                 </select>
+                                 <input 
+                                   type="number"
+                                   defaultValue={rule.value}
+                                   onBlur={async (e) => {
+                                     const res = await apiFetch(`/api/admin/reward-rules/${rule.id}`, {
+                                       method: 'PATCH',
+                                       headers: { 'Content-Type': 'application/json' },
+                                       body: JSON.stringify({ ...rule, value: parseFloat(e.target.value) })
+                                     });
+                                     if (res.ok) fetchRewardRules();
+                                   }}
+                                   className="w-16 bg-transparent px-3 py-2 text-[10px] font-black text-white outline-none focus:bg-zinc-800 transition-colors"
+                                 />
+                               </div>
+                             </div>
+                             
+                             <div className="flex items-center gap-2">
+                               <span className="text-[10px] font-black uppercase text-zinc-600">RESULTADO</span>
+                               <div className="flex items-center bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-inner">
+                                 <input 
+                                   placeholder="TEXTO DO TÍTULO"
+                                   defaultValue={rule.title_text}
+                                   onBlur={async (e) => {
+                                     const res = await apiFetch(`/api/admin/reward-rules/${rule.id}`, {
+                                       method: 'PATCH',
+                                       headers: { 'Content-Type': 'application/json' },
+                                       body: JSON.stringify({ ...rule, title_text: e.target.value })
+                                     });
+                                     if (res.ok) fetchRewardRules();
+                                   }}
+                                   className="bg-transparent px-4 py-2 text-[10px] font-black uppercase text-white outline-none focus:bg-zinc-800 transition-colors border-r border-zinc-800 w-32"
+                                 />
+                                 <div className="relative group/color px-2">
+                                   <input 
+                                     type="color"
+                                     defaultValue={rule.title_color}
+                                     onChange={async (e) => {
+                                       const res = await apiFetch(`/api/admin/reward-rules/${rule.id}`, {
+                                         method: 'PATCH',
+                                         headers: { 'Content-Type': 'application/json' },
+                                         body: JSON.stringify({ ...rule, title_color: e.target.value })
+                                       });
+                                       if (res.ok) fetchRewardRules();
+                                     }}
+                                     className="w-8 h-8 bg-transparent border-none cursor-pointer opacity-0 absolute inset-0 z-10"
+                                   />
+                                   <div className="w-5 h-5 rounded-md border border-white/10" style={{ backgroundColor: rule.title_color }} />
+                                 </div>
+                               </div>
+                             </div>
+                          </div>
+
+                          <div className="flex items-center gap-4">
+                            <div className="hidden lg:flex flex-col items-end">
+                              <span className="text-[7px] font-black uppercase text-zinc-600 tracking-widest mb-1">PRÉVIA DO SELO</span>
+                              <span 
+                                className="px-2 py-0.5 rounded-[4px] text-[8px] font-black uppercase border bg-zinc-950"
+                                style={{ borderColor: rule.title_color + '40', color: rule.title_color }}
+                              >
+                                {rule.title_text}
+                              </span>
+                            </div>
+
+                            <button 
+                              onClick={async () => {
+                                const res = await apiFetch(`/api/admin/reward-rules/${rule.id}`, { method: 'DELETE' });
+                                if (res.ok) fetchRewardRules();
+                              }}
+                              className="w-10 h-10 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded-xl transition-all flex items-center justify-center group/del shadow-lg shadow-red-900/0 hover:shadow-red-900/20"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+
+                      {rewardRules.length === 0 && (
+                        <div className="text-center py-12 bg-zinc-950 rounded-2xl border border-zinc-800 border-dashed">
+                          <p className="text-[10px] font-black text-zinc-600 uppercase tracking-widest">Nenhuma regra de título configurada</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-8 shadow-xl">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
                       <div className="flex items-center gap-4">
                         <div className="w-12 h-12 bg-green-500/10 rounded-2xl flex items-center justify-center text-green-500">
                           <Plus className="w-6 h-6" />
                         </div>
                         <div>
-                          <h3 className="text-lg font-black italic uppercase">Gestão de Recompensas</h3>
-                          <p className="text-xs text-zinc-500 font-bold uppercase">Configurar selos dos agentes</p>
+                          <h3 className="text-lg font-black italic uppercase">Gestão Manual de Selos</h3>
+                          <p className="text-xs text-zinc-500 font-bold uppercase">Conceder títulos personalizados</p>
                         </div>
                       </div>
                       
@@ -1090,7 +1359,7 @@ export default function App() {
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-500" />
                         <input 
                           type="text" 
-                          placeholder="Buscar Agentes..." 
+                          placeholder="Buscar Usuários..." 
                           value={adminSearchTerm}
                           onChange={(e) => setAdminSearchTerm(e.target.value)}
                           className="bg-zinc-950 border border-zinc-800 rounded-xl pl-9 pr-4 py-2 text-[10px] font-bold uppercase outline-none focus:ring-1 ring-green-500/50 w-full sm:w-48"
@@ -1106,16 +1375,32 @@ export default function App() {
                               <div className="w-10 h-10 bg-zinc-800 rounded-full flex items-center justify-center text-zinc-500">
                                 <UserIcon className="w-5 h-5" />
                               </div>
-                              <div>
-                                <p className="font-bold uppercase text-sm">{adminUser.username}</p>
-                                <div className="flex items-center gap-2 mt-1">
+                              <div className="flex flex-col gap-1">
+                                <p className="font-bold uppercase text-sm flex items-center gap-2">
+                                  {adminUser.username}
+                                  <span className="bg-zinc-800 text-zinc-500 px-1.5 py-0.5 rounded-md text-[7px] font-black">
+                                    {adminUser.memeCount || 0} MEMES
+                                  </span>
+                                </p>
+                                <div className="flex items-center gap-2.5 flex-wrap">
                                   {adminUser.badge_text ? (
-                                    <span className="px-2 py-0.5 rounded-[4px] text-[8px] font-black uppercase text-black" style={{ backgroundColor: adminUser.badge_color || '#22c55e' }}>
+                                    <span className="px-2 py-0.5 rounded-[4px] text-[8px] font-black uppercase text-black shrink-0" style={{ backgroundColor: adminUser.badge_color || '#22c55e' }}>
                                       {adminUser.badge_text}
                                     </span>
                                   ) : (
-                                    <span className="text-[8px] text-zinc-600 font-bold uppercase">Sem recompensa</span>
+                                    <span className="text-[8px] text-zinc-600 font-bold uppercase">Sem selo manual</span>
                                   )}
+                                  <div className="h-2 w-px bg-zinc-800 hidden sm:block" />
+                                  <div className="flex items-center gap-2">
+                                    <div className="flex items-center gap-1 bg-pink-500/10 px-1.5 py-0.5 rounded-md">
+                                      <Zap className="w-2.5 h-2.5 text-pink-500" />
+                                      <span className="text-[8px] font-black text-pink-500">{adminUser.totalViews || 0}</span>
+                                    </div>
+                                    <div className="flex items-center gap-1 bg-amber-500/10 px-1.5 py-0.5 rounded-md">
+                                      <Trophy className="w-2.5 h-2.5 text-amber-500" />
+                                      <span className="text-[8px] font-black text-amber-500">{adminUser.totalScore || 0}</span>
+                                    </div>
+                                  </div>
                                 </div>
                               </div>
                             </div>
@@ -1138,7 +1423,7 @@ export default function App() {
                         ))
                       ) : (
                         <div className="text-center py-12 bg-zinc-950 rounded-2xl border border-zinc-800 border-dashed">
-                          <p className="text-[10px] font-black text-zinc-600 uppercase tracking-widest">Nenhum agente encontrado</p>
+                          <p className="text-[10px] font-black text-zinc-600 uppercase tracking-widest">Nenhum usuário encontrado</p>
                         </div>
                       )}
                     </div>
@@ -1227,7 +1512,7 @@ export default function App() {
                       <div className="space-y-2">
                         <div className="p-3 bg-zinc-950 rounded-xl border border-zinc-800/50 flex items-center gap-3">
                           <div className="w-2 h-2 bg-green-500 rounded-full" />
-                          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-tighter">Sistema Operacional • 100% Estável</p>
+                          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-tighter">Sistema • 100% Estável</p>
                         </div>
                         <div className="p-3 bg-zinc-950 rounded-xl border border-zinc-800/50 flex items-center gap-3">
                           <div className="w-2 h-2 bg-zinc-700 rounded-full" />
@@ -1239,12 +1524,13 @@ export default function App() {
                 </div>
               </motion.div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-5 sm:gap-6 lg:gap-8">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-5">
                 {filteredMemes.map((meme) => (
                     <MemeCard 
                       key={meme.id} 
                       meme={meme} 
                       user={user} 
+                      rewardRules={rewardRules}
                       onAuthRequired={() => {
                         setAuthMode('login');
                         setIsAuthOpen(true);
@@ -1362,14 +1648,25 @@ export default function App() {
                             <UserIcon className="w-4 h-4 text-green-500" />
                           </div>
                         </div>
-                        <div>
-                          <p className="text-[10px] font-black uppercase text-white tracking-tight flex items-center gap-1.5">
+                        <div className="flex flex-col">
+                          <p className="text-[10px] font-black uppercase text-white tracking-tight flex items-center flex-wrap gap-1.5">
                             {selectedMeme.postedBy}
                             {selectedMeme.badge_text && (
-                              <span className="px-1.5 py-0.5 rounded-[4px] text-[7px] font-black uppercase text-black" style={{ backgroundColor: selectedMeme.badge_color || '#22c55e' }}>
+                              <span className="px-1.5 py-0.5 rounded-[4px] text-[7px] font-black uppercase text-black shrink-0" style={{ backgroundColor: selectedMeme.badge_color || '#22c55e' }}>
                                 {selectedMeme.badge_text}
                               </span>
                             )}
+                            {getFameBadges(selectedMeme, rewardRules).map((badge, idx) => (
+                              <motion.span 
+                                initial={{ opacity: 0, scale: 0.8 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                key={idx}
+                                className="px-1.5 py-0.5 rounded-[4px] text-[7px] font-black uppercase border bg-zinc-950 shrink-0 shadow-lg transition-all"
+                                style={{ borderColor: badge.color + '40', color: badge.color, boxShadow: `0 0 15px ${badge.color}15` }}
+                              >
+                                {badge.text}
+                              </motion.span>
+                            ))}
                           </p>
                           <p className="text-[9px] text-zinc-600 font-bold uppercase">{new Date(selectedMeme.postedAt).toLocaleDateString('pt-BR')}</p>
                         </div>
@@ -1509,7 +1806,7 @@ export default function App() {
               exit={{ scale: 0.9, opacity: 0 }}
               className="bg-zinc-900 border border-zinc-800 max-w-md w-full rounded-[2.5rem] p-8 shadow-2xl relative overflow-hidden"
             >
-              <div className="absolute top-0 left-0 w-full h-1 bg-zinc-800">
+                    <div className="absolute top-8 left-0 w-full h-1 bg-zinc-800">
                 <motion.div 
                   className="h-full bg-green-500" 
                   initial={{ width: '0%' }} 
@@ -1518,7 +1815,7 @@ export default function App() {
               </div>
 
               <div className="mb-8">
-                <p className="text-[10px] font-black text-green-500 uppercase tracking-[0.2em] mb-2">DICA {tutorialStep + 1} / {TUTORIAL_STEPS.length}</p>
+                <p className="text-[10px] font-black text-green-500 uppercase tracking-[0.2em] mb-2">Tutorial {tutorialStep + 1} / {TUTORIAL_STEPS.length}</p>
                 <h3 className="text-2xl font-black italic uppercase tracking-tighter mb-4 text-white font-display">{TUTORIAL_STEPS[tutorialStep].title}</h3>
                 <p className="text-zinc-400 text-sm leading-relaxed font-medium">
                   {TUTORIAL_STEPS[tutorialStep].content}

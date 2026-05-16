@@ -84,6 +84,16 @@ db.exec(`
     status TEXT DEFAULT 'pending',
     createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS reward_rules (
+    id TEXT PRIMARY KEY,
+    metric TEXT NOT NULL,
+    operator TEXT NOT NULL,
+    value INTEGER NOT NULL,
+    title_text TEXT NOT NULL,
+    title_color TEXT NOT NULL,
+    createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 // --- Migrations for existing DB ---
@@ -195,7 +205,7 @@ app.post('/api/auth/register', async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const role = (username.toLowerCase() === 'adm') ? 'admin' : 'agent';
+    const role = (username.toLowerCase() === 'adm' || username.toLowerCase() === 'admin') ? 'admin' : 'agent';
     
     db.prepare('INSERT INTO users (id, username, hashedPassword, role) VALUES (?, ?, ?, ?)')
       .run(userId, username, hashedPassword, role);
@@ -288,6 +298,10 @@ app.get('/api/memes', populateAuth, (req: any, res) => {
   try {
     let query = `
       SELECT m.*, u.badge_text, u.badge_color,
+      COALESCE((SELECT SUM(score) FROM memes WHERE postedById = m.postedById), 0) as userTotalScore,
+      COALESCE((SELECT SUM(views) FROM memes WHERE postedById = m.postedById), 0) as userTotalViews,
+      COALESCE((SELECT COUNT(*) FROM memes WHERE postedById = m.postedById), 0) as userMemeCount,
+      COALESCE((SELECT COUNT(*) FROM votes WHERE userId = m.postedById), 0) as userVotesGiven,
       (SELECT value FROM votes WHERE memeId = m.id AND userId = ?) as userVote
       FROM memes m
       LEFT JOIN users u ON m.postedById = u.id
@@ -459,10 +473,62 @@ app.get('/api/admin/reports', requireAuth, (req: any, res) => {
   }
 });
 
+app.get('/api/admin/reward-rules', requireAuth, (req: any, res) => {
+  if (req.session.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+  try {
+    const rules = db.prepare('SELECT * FROM reward_rules ORDER BY createdAt ASC').all();
+    res.json(rules);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/reward-rules', requireAuth, (req: any, res) => {
+  if (req.session.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+  const { metric, operator, value, title_text, title_color } = req.body;
+  const id = Math.random().toString(36).substr(2, 9);
+  try {
+    db.prepare('INSERT INTO reward_rules (id, metric, operator, value, title_text, title_color) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, metric, operator, value, title_text, title_color);
+    res.json({ id, metric, operator, value, title_text, title_color });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/admin/reward-rules/:id', requireAuth, (req: any, res) => {
+  if (req.session.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+  try {
+    db.prepare('DELETE FROM reward_rules WHERE id = ?').run(req.params.id);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.patch('/api/admin/reward-rules/:id', requireAuth, (req: any, res) => {
+  if (req.session.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+  const { metric, operator, value, title_text, title_color } = req.body;
+  try {
+    db.prepare('UPDATE reward_rules SET metric = ?, operator = ?, value = ?, title_text = ?, title_color = ? WHERE id = ?')
+      .run(metric, operator, value, title_text, title_color, req.params.id);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/admin/users', requireAuth, (req: any, res) => {
   if (req.session.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
   try {
-    const users = db.prepare('SELECT id, username, role, badge_text, badge_color FROM users ORDER BY username ASC').all();
+    const users = db.prepare(`
+      SELECT u.id, u.username, u.role, u.badge_text, u.badge_color,
+      COALESCE((SELECT SUM(score) FROM memes WHERE postedById = u.id), 0) as totalScore,
+      COALESCE((SELECT SUM(views) FROM memes WHERE postedById = u.id), 0) as totalViews,
+      COALESCE((SELECT COUNT(*) FROM memes WHERE postedById = u.id), 0) as memeCount,
+      COALESCE((SELECT COUNT(*) FROM votes WHERE userId = u.id), 0) as votesGiven
+      FROM users u
+      ORDER BY username ASC
+    `).all();
     res.json(users);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
