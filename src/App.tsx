@@ -97,13 +97,6 @@ const memeSchema = z.object({
   fileType: z.enum(['image', 'video', 'audio']),
 });
 
-// --- Helper for API Calls (Legacy fallback, now prefer Supabase)
-const apiFetch = async (url: string, options: any = {}) => {
-  // If user is trying to use legacy Node API, show warning or handle
-  const response = await fetch(url, options);
-  return response;
-};
-
 // --- Components ---
 
 interface MemeCardProps {
