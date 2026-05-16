@@ -1,0 +1,6 @@
+{
+  "name": "OPMGG - Memes",
+  "description": "Plataforma simples para postar e curtir memes com login de usuário e senha.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
