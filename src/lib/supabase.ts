@@ -44,12 +44,12 @@ export const formatSupabaseError = (err: any): string => {
     return 'Erro de conexão: Verifique se informou a URL e a Chave Anon do Supabase corretamente nas Configurações (Settings).';
   }
   
-  if (msg.includes('relation') || msg.includes('not found')) {
-    return 'Estrutura do banco não encontrada. Você aplicou o SQL contido no arquivo SUPABASE_SETUP.sql no editor do Supabase?';
+  if (msg.includes('column') || msg.includes('attribute') || msg.includes('does not exist')) {
+    return `Erro de estrutura (coluna ausente): ${err.message || 'Verifique se seu banco de dados está atualizado'}. Você aplicou o SQL contido no arquivo SUPABASE_SETUP.sql no editor do Supabase?`;
   }
 
-  if (msg.includes('column') && msg.includes('created_at')) {
-    return 'Erro: A coluna "created_at" não foi encontrada. Certifique-se de executar o SQL do arquivo SUPABASE_SETUP.sql para atualizar suas tabelas.';
+  if (msg.includes('relation') || msg.includes('not found')) {
+    return 'Estrutura do banco não encontrada. Você aplicou o SQL contido no arquivo SUPABASE_SETUP.sql no editor do Supabase?';
   }
 
   if (msg.includes('Invalid login credentials')) {

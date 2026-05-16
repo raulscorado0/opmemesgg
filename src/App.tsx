@@ -732,11 +732,35 @@ export default function App() {
       if (selectedTag) query = query.contains('tags', [selectedTag]);
       if (selectedProfileId) query = query.eq('posted_by_id', selectedProfileId);
       
-      if (sortBy === 'trending') query = query.order('score', { ascending: false });
-      else query = query.order('created_at', { ascending: false });
+      if (sortBy === 'trending') {
+        query = query.order('score', { ascending: false });
+      } else {
+        query = query.order('created_at', { ascending: false });
+      }
 
-      const { data, error: fetchError } = await query;
+      let { data, error: fetchError } = await query;
       
+      // Fallback if created_at doesn't exist (handle older schemas)
+      if (fetchError && fetchError.message.includes('created_at') && sortBy !== 'trending') {
+        let fallbackQuery = supabase
+          .from('memes')
+          .select(`
+            *,
+            profiles:posted_by_id(badge_text, badge_color)
+          `);
+        
+        if (selectedTag) fallbackQuery = fallbackQuery.contains('tags', [selectedTag]);
+        if (selectedProfileId) fallbackQuery = fallbackQuery.eq('posted_by_id', selectedProfileId);
+        
+        // Try ordering by id or no order
+        const { data: fallbackData, error: secondError } = await fallbackQuery.order('id', { ascending: false });
+        
+        if (!secondError) {
+          data = fallbackData;
+          fetchError = null;
+        }
+      }
+
       if (fetchError || !data) {
         const msg = formatSupabaseError(fetchError);
         setError(msg);

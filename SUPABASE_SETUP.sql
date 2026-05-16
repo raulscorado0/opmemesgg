@@ -112,3 +112,7 @@ CREATE POLICY "Authenticated users can report" ON public.reports FOR INSERT WITH
 -- ALTER TABLE public.memes ADD COLUMN IF NOT EXISTS posted_by_id UUID REFERENCES public.profiles(id);
 -- ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS badge_text TEXT;
 -- ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS badge_color TEXT;
+
+-- --- COMANDO PARA SE TORNAR ADMIN ---
+-- Substitua 'SEU_USERNAME' pelo seu nome de usuário após se cadastrar:
+-- UPDATE public.profiles SET role = 'admin' WHERE username = 'SEU_USERNAME';
